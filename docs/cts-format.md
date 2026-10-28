@@ -44,6 +44,12 @@ group counts. The data follows at +0x1c in that order (all u32, then all u16, th
 | 0x20 | black optimisation parameter records (u32 count + 8 bytes each) |
 | 0x3ec–0x3ef | edge enhancement / trapping parameters |
 
+Older files of the same container (CLP-320, CLX-3180, CLP-620, CLX-6220; vendor strings
+"Tissot16" and "Dali_R20") have the type 5 colour tables but no types 8, 9 or 0xa; their screens
+are in type 7 blocks, whose layout is not documented here yet. Files with block types 0–2
+(CLP-300, CLP-600, CLX-216x, CLP-340, CLX-3240) are an older format, and the files of the C43x
+and the newer M-series mono printers use a container variant this parser does not read.
+
 ## Colour conversion
 
 Index `v >> 4`, fraction `v & 15`; the 17th grid point corresponds to 256. Tetrahedral

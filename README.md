@@ -49,6 +49,20 @@ identically, so they get the same result:
 
 Reports from owners of the untested models are welcome.
 
+### Possible future models
+
+The colour files of the **CLP-620**, **CLP-320**, **CLX-3180** and **CLX-6220** use the same
+container and the same 17³ colour-table format, which this project already reads, but store their
+screens differently (block type 7, see `docs/cts-format.md`). Supporting them is feasible with a
+new screen decoder, checked with the same `verify/` method:
+
+- **CLP-620:** closest. foo2qpdl drives it with `-z3` like the C410, and Samsung's default quality
+  (Normal) is 2 bits per dot, the mode this filter produces. Samsung's Best quality uses 4 bits.
+- **CLP-320, CLX-3180:** foo2qpdl drives them with `-z2` at 1 bit per dot, so the filter would also
+  need a 1-bit output mode.
+- **CLX-6220:** the colour file is in SULDR, but none of its packages has a PPD for this model, so
+  how Samsung's driver handles it still has to be found out.
+
 Each model has two PPDs:
 
 - `*-scms.ppd`: this project's Samsung colour mode (needs `make install` and Samsung's colour file).
