@@ -1121,6 +1121,16 @@
 *FoomaticRIPOptionSetting ICM=testing3: "-C10 -Gtesting3.icm "
 *CloseUI: *ICM
 
+*OpenUI *Trapping/Trapping (Samsung colour, Best): PickOne
+*FoomaticRIPOption Trapping: enum CmdLine A
+*OrderDependency: 310 AnySetup *Trapping
+*DefaultTrapping: On
+*Trapping On/On: "%% FoomaticRIPOptionSetting: Trapping=On"
+*FoomaticRIPOptionSetting Trapping=On: " -T "
+*Trapping Off/Off: "%% FoomaticRIPOptionSetting: Trapping=Off"
+*FoomaticRIPOptionSetting Trapping=Off: " "
+*CloseUI: *Trapping
+
 *CloseGroup: Adjustment
 
 *OpenGroup: Miscellaneous/Miscellaneous

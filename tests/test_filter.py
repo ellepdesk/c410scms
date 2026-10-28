@@ -57,16 +57,63 @@ def synthetic_data(rng):
     return table, screens, blob
 
 
-def expected_page(table, screens, pixels, w, h):
+def darkness(k):
+    return 20 * k[0] + 20 * k[1] + 5 * k[2] + 33 * k[3]
+
+
+def trap(ink, w, h):
+    """Reference for -t, from the rules in docs/trapping.md. ink: list of [C, M, Y, K] per pixel."""
+    def at(y, x):
+        return ink[y * w + x] if 0 <= y < h and 0 <= x < w else [0, 0, 0, 0]
+
+    def straight(y, x, uy, ux):
+        return at(y + ux, x + uy) == at(y, x) or at(y - ux, x - uy) == at(y, x)
+
+    out = []
+    for y in range(h):
+        for x in range(w):
+            p = at(y, x)
+            wide = p[3] >= 108
+            best = [0, 0, 0]
+            for uy, ux in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                if not straight(y, x, uy, ux) or at(y - uy, x - ux) != p:
+                    continue
+                for dist in (1, 2):
+                    qy, qx = y + dist * uy, x + dist * ux
+                    q = at(qy, qx)
+                    e = darkness(q) - darkness(p)
+                    if q == [0, 0, 0, 0] or at(qy + uy, qx + ux) != q or not straight(qy, qx, uy, ux):
+                        continue
+                    cut = 0
+                    if dist == 1:
+                        if e >= 0 or (wide and e >= -440):
+                            continue
+                    else:
+                        if not wide or at(y + uy, x + ux) != p or at(y - 2 * uy, x - 2 * ux) != p:
+                            continue
+                        if e >= -440:
+                            cut = max(0, (480 + e) // 40) if 480 + e > 0 else 0
+                    for c in range(3):
+                        v = q[c] - cut
+                        if v - p[c] >= 24:
+                            best[c] = max(best[c], v)
+            out.append([max(p[c], best[c]) for c in range(3)] + [p[3]])
+    return out
+
+
+def expected_page(table, screens, pixels, w, h, trapped=False):
+    ink = [[255 - v for v in interpolate(table, px)] for px in pixels]
+    if trapped:
+        ink = trap(ink, w, h)
     out = bytearray()
     for y in range(h):
         for x in range(w):
-            v = interpolate(table, pixels[y * w + x])
+            v = [255 - i for i in ink[y * w + x]]
             byte = 0
             for p, (sw, sh, cells) in enumerate(screens):
-                ink = ink_level(v[p], cells[(y % sh) * sw + x % sw])
-                byte |= (ink >> 1) << (7 - p)
-                byte |= (ink & 1) << (3 - p)
+                level = ink_level(v[p], cells[(y % sh) * sw + x % sw])
+                byte |= (level >> 1) << (7 - p)
+                byte |= (level & 1) << (3 - p)
             out.append(byte)
     if out and out[0] == ord("P"):
         out[0] = 0
@@ -93,6 +140,41 @@ class FilterTest(unittest.TestCase):
             ppm += b"P6\n# comment\n%d %d\n255\n" % (w, h) + bytes(c for p in pixels for c in p)
             expected += expected_page(table, screens, pixels, w, h)
         self.assertEqual(self.run_filter(blob, ppm), expected)
+
+    def test_trapping_matches_python_model_on_block_pages(self):
+        rng = random.Random(36)
+        table, screens, blob = synthetic_data(rng)
+        ppm, expected = b"", b""
+        for w, h in ((41, 29), (13, 3)):
+            colours = [tuple(rng.randrange(256) for _ in range(3)) for _ in range(5)] + [(255, 255, 255)]
+            pixels = [colours[0]] * (w * h)
+            for _ in range(12):
+                c = rng.choice(colours)
+                y0, x0 = rng.randrange(h), rng.randrange(w)
+                for y in range(y0, min(h, y0 + rng.randrange(1, 9))):
+                    for x in range(x0, min(w, x0 + rng.randrange(1, 9))):
+                        pixels[y * w + x] = c
+            ppm += b"P6\n%d %d\n255\n" % (w, h) + bytes(c for p in pixels for c in p)
+            expected += expected_page(table, screens, pixels, w, h, trapped=True)
+        self.assertEqual(self.run_filter(blob, ppm, "-t"), expected)
+
+    def test_trapping_spreads_the_lighter_colour_under_the_darker(self):
+        light, dark = [0, 0, 180, 0], [200, 0, 0, 0]
+        ink = [light] * 3 + [dark] * 3
+        self.assertEqual(trap(ink * 3, 6, 3)[3], [200, 0, 180, 0])
+        self.assertEqual(trap(ink * 3, 6, 3)[2], light)
+
+    def test_trapping_is_two_pixels_wide_under_black(self):
+        light, black = [0, 150, 0, 0], [0, 0, 0, 250]
+        row = trap(([light] * 3 + [black] * 5) * 3, 8, 3)[8:16]
+        self.assertEqual([px[1] for px in row], [150, 150, 150, 150, 150, 0, 0, 0])
+
+    def test_trapping_leaves_white_and_thin_black_lines_alone(self):
+        white, black, colour = [0, 0, 0, 0], [0, 0, 0, 250], [0, 150, 0, 0]
+        ink = [white] * 3 + [black] * 3
+        self.assertEqual(trap(ink * 3, 6, 3), ink * 3)
+        line = [colour] * 3 + [black] + [colour] * 3
+        self.assertEqual(trap(line * 3, 7, 3), line * 3)
 
     def test_exact_white_prints_nothing(self):
         rng = random.Random(1)

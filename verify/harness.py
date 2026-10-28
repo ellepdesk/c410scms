@@ -95,13 +95,13 @@ def decode_planes(stream, workdir, tag):
     return planes
 
 
-def samsung(img, model, edges, workdir):
+def samsung(img, model, trap, edge, workdir):
     ppd = os.path.join(workdir, "samsung.ppd")
     with gzip.open(os.path.join(SULD, f"Samsung_{model}_Series.ppd.gz"), "rt", errors="replace") as f:
         text = f.read()
     with open(ppd, "w") as f:
         f.write(text + EDGE_OPTIONS)
-    opts = "Quality=600x600_2" + ("" if edges else " JCLTrapping=Off JCLEdgeEnhance=Off")
+    opts = f"Quality=600x600_2 JCLTrapping={'medium' if trap else 'Off'} JCLEdgeEnhance={'normal' if edge else 'Off'}"
     ras = os.path.join(workdir, "page.ras")
     with open(ras, "wb") as f:
         f.write(cups_raster(img))
@@ -111,17 +111,17 @@ def samsung(img, model, edges, workdir):
     return decode_planes(out, workdir, "samsung")
 
 
-def ours(img, workdir):
+def ours(img, workdir, trap=False):
     dat = os.path.join(workdir, "c410scms.dat")
     subprocess.run([sys.executable, "-I", os.path.join(SRC, "tools", "c410scms-gen"), CTS, LIB, "-o", dat],
                    check=True, capture_output=True)
     h, w, _ = img.shape
     ppm = b"P6\n%d %d\n255\n" % (w, h) + img.tobytes()
-    bitcmyk = subprocess.run([os.path.join(SRC, "c410scms-filter"), dat], input=ppm,
+    bitcmyk = subprocess.run([os.path.join(SRC, "c410scms-filter")] + (["-t"] if trap else []) + [dat], input=ppm,
                              capture_output=True, check=True).stdout
     qpdl = subprocess.run(["foo2qpdl", "-z3", "-c", "-r1200x600", f"-g{2 * w}x{h}", "-p0"],
                           input=bitcmyk, capture_output=True, check=True).stdout
-    return decode_planes(qpdl, workdir, "ours")
+    return decode_planes(qpdl, workdir, "ours-trap" if trap else "ours")
 
 
 def main():
@@ -130,13 +130,17 @@ def main():
                     help="which Samsung PPD drives the reference run")
     ap.add_argument("--edges", action="store_true",
                     help="keep Samsung's trapping and edge enhancement on (not implemented here; shows their effect)")
+    ap.add_argument("--trap", action="store_true",
+                    help="Samsung's trapping on (edge enhancement off) against this project's approximate -t")
     ap.add_argument("--size", type=int, default=2400, help="test image size in pixels (even)")
     args = ap.parse_args()
+    if args.trap:
+        return compare_trapping(args)
 
     img = np.full((args.size + PAD, args.size, 3), 255, np.uint8)
     img[:args.size] = test_image(args.size)
     with tempfile.TemporaryDirectory() as workdir:
-        ref = samsung(img, args.model, args.edges, workdir)
+        ref = samsung(img, args.model, args.edges, args.edges, workdir)
         got = ours(img, workdir)
 
     q, s = args.size // 2, args.size
@@ -152,6 +156,25 @@ def main():
         print(f"  {name}: {a.size} pixels compared, {int(diff.sum())} differ ({per})")
     print("BIT-EXACT" if total == 0 else f"{total} pixels differ")
     sys.exit(0 if total == 0 or args.edges else 1)
+
+
+def compare_trapping(args):
+    img = np.full((args.size + PAD, args.size, 3), 255, np.uint8)
+    img[:args.size] = test_image(args.size)
+    with tempfile.TemporaryDirectory() as workdir:
+        ref = samsung(img, args.model, True, False, workdir)
+        plain = ours(img, workdir)
+        got = ours(img, workdir, trap=True)
+    s = args.size
+    print(f"Samsung {args.model} PPD, Best quality, trapping medium, edge enhancement off")
+    before = after = 0
+    for p, name in enumerate("CMYK"):
+        a, b, c = ref[p][:s, :s], plain[p][:s, :s], got[p][:s, :s]
+        before += int((a != b).sum())
+        after += int((a != c).sum())
+        print(f"  {name}: Samsung's trapping changes {int((a != b).sum())} pixels; with -t {int((a != c).sum())} differ")
+    print(f"-t reproduces {100 * (before - after) / max(before, 1):.1f}% of Samsung's trapping on this page"
+          " (approximate by design, see docs/trapping.md)")
 
 
 if __name__ == "__main__":

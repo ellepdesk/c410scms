@@ -11,6 +11,10 @@
  *
  * Data file (little endian): "C410SCMS" u32 version, 17^3*4 table bytes (255 - ink, CMYK),
  * then for C, M, Y, K: u16 width, u16 height, width*height*3 threshold bytes.
+ *
+ * Trapping (-t) approximates Samsung's host-side trapping from measurements of its output, not
+ * bit-exact: along straight edges between flat areas, the lighter side's C/M/Y spread under the
+ * darker side, 1 pixel, or 2 under areas with much black.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -18,6 +22,11 @@
 #include <string.h>
 
 #define GRID 17
+#define TRAP_GAP 24		/* ink difference below which a colour is not spread */
+#define TRAP_WIDE_K 108		/* black ink from which traps are 2 pixels wide */
+#define TRAP_CLOSE (22 * 20)	/* darkness margin (x20) below which a wide trap only reaches its 2nd pixel */
+#define WIN 3			/* rows a trap looks above and below a pixel */
+#define RING (2 * WIN + 1)
 
 static uint8_t table[GRID * GRID * GRID * 4];
 
@@ -118,21 +127,107 @@ static int read_int(FILE *f)
 	return v;
 }
 
+static int page_w, page_h;
+static uint8_t *ring[RING];	/* ink (not 255 - ink) of rows y - WIN .. y + WIN, at y % RING */
+static const uint8_t white_px[4];
+
+static const uint8_t *px(int y, int x)
+{
+	if (y < 0 || y >= page_h || x < 0 || x >= page_w)
+		return white_px;
+	return ring[y % RING] + (size_t)x * 4;
+}
+
+static int same(const uint8_t *a, const uint8_t *b)
+{
+	return !memcmp(a, b, 4);
+}
+
+/* 20 x (C + M + Y/4 + 1.65 K): decides which side of an edge is the darker one */
+static int darkness(const uint8_t *k)
+{
+	return 20 * k[0] + 20 * k[1] + 5 * k[2] + 33 * k[3];
+}
+
+/* the edge runs straight past (y, x): a sideways neighbour has the same colour */
+static int straight(int y, int x, int uy, int ux)
+{
+	const uint8_t *p = px(y, x);
+
+	return same(px(y + ux, x + uy), p) || same(px(y - ux, x - uy), p);
+}
+
+static void trap_pixel(int y, int x, uint8_t *out)
+{
+	static const int dirs[4][2] = { { 0, 1 }, { 0, -1 }, { 1, 0 }, { -1, 0 } };
+	const uint8_t *p = px(y, x);
+	int dp = darkness(p), wide = p[3] >= TRAP_WIDE_K;
+	int best[3] = { 0, 0, 0 };
+
+	memcpy(out, p, 4);
+	/* inside a flat area there is nothing to spread */
+	if (same(px(y, x - 1), p) && same(px(y, x + 1), p) && same(px(y - 1, x), p) && same(px(y + 1, x), p) &&
+	    (!wide || (same(px(y, x - 2), p) && same(px(y, x + 2), p) && same(px(y - 2, x), p) && same(px(y + 2, x), p))))
+		return;
+	for (int d = 0; d < 4; d++) {
+		int uy = dirs[d][0], ux = dirs[d][1];
+
+		if (!straight(y, x, uy, ux) || !same(px(y - uy, x - ux), p))
+			continue;
+		for (int dist = 1; dist <= 2; dist++) {
+			int qy = y + dist * uy, qx = x + dist * ux;
+			const uint8_t *q = px(qy, qx);
+			int e = darkness(q) - dp, cut = 0;
+
+			if (same(q, white_px) || !same(px(qy + uy, qx + ux), q) || !straight(qy, qx, uy, ux))
+				continue;
+			if (dist == 1) {
+				if (e >= 0 || (wide && e >= -TRAP_CLOSE))
+					continue;
+			} else {
+				if (!wide || !same(px(y + uy, x + ux), p) || !same(px(y - 2 * uy, x - 2 * ux), p))
+					continue;
+				/* next to a colour about as dark as itself, black only takes a reduced trap */
+				if (e >= -TRAP_CLOSE)
+					cut = 480 + e > 0 ? (480 + e) / 40 : 0;
+			}
+			for (int c = 0; c < 3; c++) {
+				int v = q[c] - cut;
+
+				if (v - p[c] >= TRAP_GAP && v > best[c])
+					best[c] = v;
+			}
+		}
+	}
+	for (int c = 0; c < 3; c++)
+		if (best[c] > out[c])
+			out[c] = best[c];
+}
+
 int main(int argc, char **argv)
 {
 	/* -b ROWS: print nothing from that row of each page on (foo2qpdl band padding, see the wrapper) */
 	long blank_from = -1;
+	int trap = 0;
 
-	if (argc == 4 && !strcmp(argv[1], "-b")) {
-		blank_from = atol(argv[2]);
-		argv += 2;
-		argc -= 2;
+	while (argc > 2 && argv[1][0] == '-') {
+		if (!strcmp(argv[1], "-t")) {
+			trap = 1;
+			argv++;
+			argc--;
+		} else if (!strcmp(argv[1], "-b") && argc > 3) {
+			blank_from = atol(argv[2]);
+			argv += 2;
+			argc -= 2;
+		} else {
+			break;
+		}
 	}
 	if (argc != 2)
-		die("usage: c410scms-filter [-b rows] <data-file> <ppm-pages >bitcmyk-pages");
+		die("usage: c410scms-filter [-t] [-b rows] <data-file> <ppm-pages >bitcmyk-pages");
 	load_data(argv[1]);
 
-	int first_byte = 1;
+	int first_byte = 1, delay = trap ? WIN : 0;
 
 	for (;;) {
 		int c1 = getc(stdin), c2 = getc(stdin);
@@ -149,29 +244,51 @@ int main(int argc, char **argv)
 
 		if (!in || !out)
 			die("out of memory");
-		for (int y = 0; y < h; y++) {
+		for (int i = 0; i < RING; i++)
+			if (!(ring[i] = malloc((size_t)w * 4)))
+				die("out of memory");
+		page_w = w;
+		page_h = h;
+		for (int y = 0; y < h + delay; y++) {
+			if (y < h) {
+				uint8_t *ink = ring[y % RING];
+
+				if (fread(in, 3, w, stdin) != (size_t)w)
+					die("short ppm data");
+				for (int x = 0; x < w; x++) {
+					interpolate(in + x * 3, ink + x * 4);
+					for (int p = 0; p < 4; p++)
+						ink[x * 4 + p] = 255 - ink[x * 4 + p];
+				}
+			}
+
+			int oy = y - delay;
 			const uint8_t *row[4];
 
-			if (fread(in, 3, w, stdin) != (size_t)w)
-				die("short ppm data");
+			if (oy < 0)
+				continue;
 			for (int p = 0; p < 4; p++)
-				row[p] = screen[p].thr + (size_t)(y % screen[p].h) * screen[p].w * 3;
+				row[p] = screen[p].thr + (size_t)(oy % screen[p].h) * screen[p].w * 3;
 			for (int x = 0; x < w; x++) {
-				uint8_t v[4];
+				uint8_t k[4];
 				int byte = 0;
 
-				interpolate(in + x * 3, v);
+				if (trap)
+					trap_pixel(oy, x, k);
+				else
+					memcpy(k, px(oy, x), 4);
 				for (int p = 0; p < 4; p++) {
 					const uint8_t *t = row[p] + (x % screen[p].w) * 3;
-					int code = v[p] >= t[0] ? 3 : v[p] >= t[1] ? 2 : v[p] >= t[2] ? 1 : 0;
-					int ink = 3 - code;
+					int v = 255 - k[p];
+					int code = v >= t[0] ? 3 : v >= t[1] ? 2 : v >= t[2] ? 1 : 0;
+					int level = 3 - code;
 
-					byte |= (ink >> 1) << (7 - p);
-					byte |= (ink & 1) << (3 - p);
+					byte |= (level >> 1) << (7 - p);
+					byte |= (level & 1) << (3 - p);
 				}
 				out[x] = byte;
 			}
-			if (blank_from >= 0 && y >= blank_from)
+			if (blank_from >= 0 && oy >= blank_from)
 				memset(out, 0, w);
 			/* foo2qpdl takes a stream starting with 'P' for pksmraw; this pixel is in the clipped margin. */
 			if (first_byte && out[0] == 'P')
@@ -179,6 +296,8 @@ int main(int argc, char **argv)
 			first_byte = 0;
 			fwrite(out, 1, w, stdout);
 		}
+		for (int i = 0; i < RING; i++)
+			free(ring[i]);
 		free(in);
 		free(out);
 	}

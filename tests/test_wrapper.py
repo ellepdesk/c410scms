@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Pelle van der Heide
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""tools/patch-foo2qpdl-wrapper: the -Cscms pipeline and its bottom clip, with stub programs."""
+"""tools/patch-foo2qpdl-wrapper: the -Cscms pipeline, its bottom clip and -T, with stub programs."""
 import os
 import stat
 import subprocess
@@ -10,10 +10,17 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The two anchors the patch looks for, with just enough around them to run the -Cscms branch.
+# The anchors the patch looks for, with just enough around them to run the -Cscms branch.
 STUB_WRAPPER = """#!/bin/sh
 PREFIX=/usr
 GS=gs
+while getopts "ABS:D:" opt
+do
+	case $opt in
+	A)	AIB=-A;;
+	esac
+done
+shift `expr $OPTIND - 1`
 COLORMODE=$1; COLOR=-c; RES=1200x600; XDIM=$2; YDIM=$3; CLIP_UL="$4"; CLIP_LR="$5"
 case "$COLORMODE" in
 0|"")
@@ -36,7 +43,7 @@ STUBS = {
 
 
 class WrapperClipTest(unittest.TestCase):
-    def foo2qpdl_args(self, ydim, clip_ul, clip_lr):
+    def foo2qpdl_args(self, ydim, clip_ul, clip_lr, opts=()):
         with tempfile.TemporaryDirectory() as d:
             for name, body in STUBS.items():
                 path = os.path.join(d, name)
@@ -50,7 +57,7 @@ class WrapperClipTest(unittest.TestCase):
             subprocess.run([sys.executable, os.path.join(ROOT, "tools", "patch-foo2qpdl-wrapper"), stub, out],
                            check=True, capture_output=True)
             env = dict(os.environ, PATH=d + os.pathsep + os.environ["PATH"])
-            res = subprocess.run(["sh", out, "scms", "9920", str(ydim), clip_ul, clip_lr],
+            res = subprocess.run(["sh", out, *opts, "scms", "9920", str(ydim), clip_ul, clip_lr],
                                  input=b"", env=env, check=True, capture_output=True)
             lines = dict(line.split(" ", 1) for line in res.stdout.decode().splitlines())
             return lines["filter"].split()[:-1], lines["foo2qpdl"].split()
@@ -71,6 +78,10 @@ class WrapperClipTest(unittest.TestCase):
     def test_small_lower_clip_clips_to_band_instead(self):
         # 7016 - 100 - 0 = 6916 rows would need 124 rows of padding, more than the clip has
         self.assertEqual(self.clip(7016, "-u 150x100", "-l 150x0"), (6912, "150x4", []))
+
+    def test_trapping_option_reaches_the_filter(self):
+        self.assertEqual(self.foo2qpdl_args(6600, "-u 150x100", "-l 150x100")[0], [])
+        self.assertEqual(self.foo2qpdl_args(6600, "-u 150x100", "-l 150x100", ["-T"])[0], ["-t"])
 
 
 if __name__ == "__main__":
