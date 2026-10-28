@@ -34,6 +34,15 @@ No x86 binaries or emulation are needed at print time, so it works on ARM print 
 `c410scms.dat` in `/usr/share/foo2qpdl`. The new mode is used only for colour jobs at
 1200×600 (Best); monochrome and 600×600 jobs take foo2qpdl's original path.
 
+## Just the C410 PPD
+
+If you only want foo2qpdl set up correctly for the C410, without Samsung's colour file,
+use `ppd/samsung-c410-foo2qpdl.ppd` with the stock `foo2qpdl-wrapper`. It replaces the CLP-365
+PPD that C410 owners usually borrow: C410 name and device ID, and the C410's real resolution
+choices (Best = 600 dpi at 2 bits per dot, Normal = 600 dpi at 1 bit; no 1200×1200).
+
+    sudo lpadmin -p <queue> -P ppd/samsung-c410-foo2qpdl.ppd
+
 ## How it works
 
     gs (RGB, 600 dpi) → c410scms-filter → foo2qpdl -z3 → printer

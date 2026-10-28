@@ -61,7 +61,7 @@
 *Throughput:	"1"
 *LandscapeOrientation: Plus90
 *TTRasterizer:	Type42
-*1284DeviceID: "MFG:Samsung;MDL:CLP-360 Series;CMD:SPLC;DRV:Dfoo2qpdl,R1,M0,TF;"
+*1284DeviceID: "MFG:Samsung;MDL:C410 Series;CMD:SPLC;DRV:Dfoo2qpdl,R1,M0,TF;"
 
 *driverName foo2qpdl: ""
 *driverType F/Filter: ""
