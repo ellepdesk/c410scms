@@ -1,7 +1,8 @@
 # c410scms: Samsung colour for the Xpress C410 with foo2qpdl
 
 Open reimplementation of the colour conversion and 2-bit screening of Samsung's proprietary
-Linux driver for the **Samsung Xpress C410** (C410W/C410FW family), as a filter in front of
+Linux driver for the **Samsung Xpress C410**, which Samsung also uses for the CLP-360/365 and
+Xpress C420 (see [Supported printers](#supported-printers)), as a filter in front of
 [foo2zjs](https://github.com/koenkooi/foo2zjs)' `foo2qpdl -z3`. Output is bit-identical to
 Samsung's `rastertospl` at its Best (2-bit) quality with trapping and edge enhancement off.
 No x86 binaries or emulation are needed at print time, so it works on ARM print servers.
@@ -27,21 +28,35 @@ No x86 binaries or emulation are needed at print time, so it works on ARM print 
     make data CTS=/path/to/C410sc.cts [LIB=/path/to/libscmssc.so]
     make check
     sudo make install
-    sudo lpadmin -p <queue> -P ppd/samsung-c410-scms.ppd -o ICM=scms -o Resolution=1200x600dpi
+    sudo lpadmin -p <queue> -P ppd/samsung-<model>-scms.ppd -o ICM=scms -o Resolution=1200x600dpi
 
 `make install` puts `c410scms-filter` and `foo2qpdl-c410scms-wrapper` (your installed
 `foo2qpdl-wrapper` plus a `-Cscms` colour mode) in `/usr/lib/cups/filter`, and the generated
 `c410scms.dat` in `/usr/share/foo2qpdl`. The new mode is used only for colour jobs at
 1200×600 (Best); monochrome and 600×600 jobs take foo2qpdl's original path.
 
-## Just the C410 PPD
+## Supported printers
 
-If you only want foo2qpdl set up correctly for the C410, without Samsung's colour file,
-use `ppd/samsung-c410-foo2qpdl.ppd` with the stock `foo2qpdl-wrapper`. It replaces the CLP-365
-PPD that C410 owners usually borrow: C410 name and device ID, and the C410's real resolution
-choices (Best = 600 dpi at 2 bits per dot, Normal = 600 dpi at 1 bit; no 1200×1200).
+Samsung's current driver (SULDR 1.00.39) uses one and the same colour file for these models
+(`C410sc.cts`, `C420sc.cts` and `CLP-360sc.cts` are byte-identical) and configures them
+identically, so they get the same result:
 
-    sudo lpadmin -p <queue> -P ppd/samsung-c410-foo2qpdl.ppd
+| Printer | PPDs | Status |
+|---|---|---|
+| Xpress C410 / C410W | `samsung-c410-*.ppd` | tested on a C410W |
+| CLP-360, CLP-365, CLP-365W | `samsung-clp360-*.ppd` | same driver data; foo2qpdl supports it (`-z3`); not tested on hardware |
+| Xpress C420 / C420W | `samsung-c420-*.ppd` | same driver data; foo2qpdl support and device ID unconfirmed |
+
+Reports from owners of the untested models are welcome.
+
+Each model has two PPDs:
+
+- `*-scms.ppd`: this project's Samsung colour mode (needs `make install` and Samsung's colour file).
+- `*-foo2qpdl.ppd`: just foo2qpdl set up correctly, with the stock `foo2qpdl-wrapper` and no
+  Samsung file. Use this instead of the borrowed CLP-365 PPD: correct name and device ID, and the
+  real resolution choices (Best = 600 dpi at 2 bits per dot, Normal = 600 dpi at 1 bit; no 1200×1200).
+
+The CLP-360 and C420 PPDs are generated from the C410 ones by `tools/make-model-ppds`.
 
 ## How it works
 

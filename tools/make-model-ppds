@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+# Copyright (C) 2026 Pelle van der Heide
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Derive the CLP-360 series and Xpress C420 PPDs from the C410 ones.
+
+Samsung's driver configures these models identically to the C410 (same colour file, same
+driver settings, same paper/tray/media choices), so only the model identity differs.
+Usage: make-model-ppds [ppd-dir]
+"""
+import os
+import sys
+
+MODELS = {
+    "clp360": {
+        "model": "Samsung CLP-360 Series",
+        "product": "(CLP-360 Series)",
+        "mdl": "CLP-360 Series",
+        "note": "Covers CLP-360, CLP-365 and CLP-365W; device ID as in Samsung's own PPD.",
+    },
+    "c420": {
+        "model": "Samsung Xpress C420",
+        "product": "(C420 Series)",
+        "mdl": "C420 Series",
+        "note": "Device ID inferred from the C410 (which reports 'C410 Series'); unconfirmed.",
+    },
+}
+VARIANTS = ("foo2qpdl", "scms")
+
+
+def derive(text, variant, key, m):
+    replacements = [
+        ("*% You may save this file as 'Samsung-CLP-365-foo2qpdl.ppd'",
+         f"*% You may save this file as 'samsung-{key}-{variant}.ppd'\n*% {m['note']}"),
+        ('*Product:\t"(C410 Series)"', f'*Product:\t"{m["product"]}"'),
+        ('*ModelName:     "Samsung Xpress C410"', f'*ModelName:     "{m["model"]}"'),
+        ('*ShortNickName: "Samsung Xpress C410 foo2qpdl"', f'*ShortNickName: "{m["model"]} foo2qpdl"'),
+        ('*NickName:      "Samsung Xpress C410 ', f'*NickName:      "{m["model"]} '),
+        ("MDL:C410 Series;", f"MDL:{m['mdl']};"),
+    ]
+    for old, new in replacements:
+        if text.count(old) != 1:
+            raise SystemExit(f"{variant}: expected exactly one {old!r}")
+        text = text.replace(old, new)
+    return text
+
+
+def main():
+    ppd_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "ppd")
+    for variant in VARIANTS:
+        with open(os.path.join(ppd_dir, f"samsung-c410-{variant}.ppd")) as f:
+            template = f.read()
+        for key, m in MODELS.items():
+            out = os.path.join(ppd_dir, f"samsung-{key}-{variant}.ppd")
+            with open(out, "w") as f:
+                f.write(derive(template, variant, key, m))
+            print("wrote", out)
+
+
+if __name__ == "__main__":
+    main()
