@@ -111,43 +111,43 @@ def samsung(img, model, trap, edge, workdir):
     return decode_planes(out, workdir, "samsung")
 
 
-def ours(img, workdir, trap=False):
+def ours(img, workdir, opts=()):
     dat = os.path.join(workdir, "c410scms.dat")
     subprocess.run([sys.executable, "-I", os.path.join(SRC, "tools", "c410scms-gen"), CTS, LIB, "-o", dat],
                    check=True, capture_output=True)
     h, w, _ = img.shape
     ppm = b"P6\n%d %d\n255\n" % (w, h) + img.tobytes()
-    bitcmyk = subprocess.run([os.path.join(SRC, "c410scms-filter")] + (["-t"] if trap else []) + [dat], input=ppm,
+    bitcmyk = subprocess.run([os.path.join(SRC, "c410scms-filter"), *opts, dat], input=ppm,
                              capture_output=True, check=True).stdout
     qpdl = subprocess.run(["foo2qpdl", "-z3", "-c", "-r1200x600", f"-g{2 * w}x{h}", "-p0"],
                           input=bitcmyk, capture_output=True, check=True).stdout
-    return decode_planes(qpdl, workdir, "ours-trap" if trap else "ours")
+    return decode_planes(qpdl, workdir, "ours" + "".join(opts))
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--model", default="C410", choices=("C410", "C420", "CLP-360"),
                     help="which Samsung PPD drives the reference run")
-    ap.add_argument("--edges", action="store_true",
-                    help="keep Samsung's trapping and edge enhancement on (not implemented here; shows their effect)")
     ap.add_argument("--trap", action="store_true",
                     help="Samsung's trapping on (edge enhancement off) against this project's approximate -t")
+    ap.add_argument("--edges", action="store_true",
+                    help="Samsung's defaults (trapping and edge enhancement on) against this project's -t -e")
     ap.add_argument("--size", type=int, default=2400, help="test image size in pixels (even)")
     args = ap.parse_args()
-    if args.trap:
-        return compare_trapping(args)
+    if args.trap or args.edges:
+        return compare_approximation(args)
 
     img = np.full((args.size + PAD, args.size, 3), 255, np.uint8)
     img[:args.size] = test_image(args.size)
     with tempfile.TemporaryDirectory() as workdir:
-        ref = samsung(img, args.model, args.edges, args.edges, workdir)
+        ref = samsung(img, args.model, False, False, workdir)
         got = ours(img, workdir)
 
     q, s = args.size // 2, args.size
     regions = {"noise": (slice(0, q), slice(0, q)), "gradients": (slice(0, q), slice(q, s)),
                "grey ramp": (slice(q, s), slice(0, q)), "colour blocks": (slice(q, s), slice(q, s))}
     total = 0
-    print(f"Samsung {args.model} PPD, Best quality, trapping/edge enhancement {'on' if args.edges else 'off'}")
+    print(f"Samsung {args.model} PPD, Best quality, trapping/edge enhancement off")
     for p, name in enumerate("CMYK"):
         a, b = ref[p][:s, :s], got[p][:s, :s]
         diff = a != b
@@ -155,25 +155,28 @@ def main():
         per = ", ".join(f"{r} {int(diff[sl].sum())}" for r, sl in regions.items())
         print(f"  {name}: {a.size} pixels compared, {int(diff.sum())} differ ({per})")
     print("BIT-EXACT" if total == 0 else f"{total} pixels differ")
-    sys.exit(0 if total == 0 or args.edges else 1)
+    sys.exit(0 if total == 0 else 1)
 
 
-def compare_trapping(args):
+def compare_approximation(args):
+    """Samsung with trapping (and with --edges also edge enhancement) against -t (-e); not bit-exact."""
+    edge = args.edges
+    opts = ["-t"] + (["-e"] if edge else [])
     img = np.full((args.size + PAD, args.size, 3), 255, np.uint8)
     img[:args.size] = test_image(args.size)
     with tempfile.TemporaryDirectory() as workdir:
-        ref = samsung(img, args.model, True, False, workdir)
+        ref = samsung(img, args.model, True, edge, workdir)
         plain = ours(img, workdir)
-        got = ours(img, workdir, trap=True)
+        got = ours(img, workdir, opts)
     s = args.size
-    print(f"Samsung {args.model} PPD, Best quality, trapping medium, edge enhancement off")
+    print(f"Samsung {args.model} PPD, Best quality, trapping medium, edge enhancement {'normal' if edge else 'off'}")
     before = after = 0
     for p, name in enumerate("CMYK"):
         a, b, c = ref[p][:s, :s], plain[p][:s, :s], got[p][:s, :s]
         before += int((a != b).sum())
         after += int((a != c).sum())
-        print(f"  {name}: Samsung's trapping changes {int((a != b).sum())} pixels; with -t {int((a != c).sum())} differ")
-    print(f"-t reproduces {100 * (before - after) / max(before, 1):.1f}% of Samsung's trapping on this page"
+        print(f"  {name}: Samsung changes {int((a != b).sum())} pixels; with {' '.join(opts)} {int((a != c).sum())} differ")
+    print(f"{' '.join(opts)} reproduces {100 * (before - after) / max(before, 1):.1f}% of Samsung's changes on this page"
           " (approximate by design, see docs/trapping.md)")
 
 

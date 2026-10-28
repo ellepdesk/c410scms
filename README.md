@@ -5,7 +5,7 @@ Linux driver for the **Samsung Xpress C410**, which Samsung also uses for the CL
 Xpress C420 (see [Supported printers](#supported-printers)), as a filter in front of
 [foo2zjs](https://github.com/koenkooi/foo2zjs)' `foo2qpdl -z3`. Output is bit-identical to
 Samsung's `rastertospl` at its Best (2-bit) quality with trapping and edge enhancement off on
-both sides; with trapping on (the default) it approximates Samsung's trapping.
+both sides; with those on (the default) it approximates them.
 No x86 binaries or emulation are needed at print time, so it works on ARM print servers.
 
 ## What you need
@@ -32,7 +32,7 @@ No x86 binaries or emulation are needed at print time, so it works on ARM print 
     sudo lpadmin -p <queue> -P ppd/samsung-<model>-scms.ppd -o ICM=scms -o Resolution=1200x600dpi
 
 `make install` puts `c410scms-filter` and `foo2qpdl-c410scms-wrapper` (your installed
-`foo2qpdl-wrapper` plus a `-Cscms` colour mode and its `-T` trapping switch) in `/usr/lib/cups/filter`, and the generated
+`foo2qpdl-wrapper` plus a `-Cscms` colour mode and its `-T` trapping and `-E` edge switches) in `/usr/lib/cups/filter`, and the generated
 `c410scms.dat` in `/usr/share/foo2qpdl`. The new mode is used only for colour jobs at
 1200×600 (Best); monochrome and 600×600 jobs take foo2qpdl's original path.
 
@@ -77,8 +77,8 @@ The CLP-360 and C420 PPDs are generated from the C410 ones by `tools/make-model-
 
     verify/run                    # C410 PPD
     verify/run --model CLP-360    # or C420
-    verify/run --edges            # keep Samsung's trapping/edge enhancement on, to see what they add
     verify/run --trap             # Samsung's trapping against this project's approximation
+    verify/run --edges            # Samsung's defaults (trapping + edge enhancement) against ours
 
 This builds a local x86-64 Docker image that downloads Samsung's driver from SULDR
 (checksum-pinned), renders a test page through Samsung's `rastertospl` and through this project,
@@ -99,7 +99,9 @@ See `docs/cts-format.md` for the file format and `docs/verification.md` for how 
 Trapping (on by default, PPD option *Trapping*) spreads the lighter colour a pixel or two under
 the darker one where colours meet, so misregistration leaves no white gaps. Samsung's driver does
 the same; this is an approximation measured from its output, not bit-exact, see
-`docs/trapping.md`. Edge enhancement is not implemented.
+`docs/trapping.md`. Edge enhancement (on by default, PPD option *Edge enhancement*) adds half or
+whole 1200 dpi dots on the outermost pixel of text and graphics for crisper edges, again measured
+from Samsung's output.
 
 ## Licence and legal
 

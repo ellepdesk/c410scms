@@ -4,7 +4,7 @@
 """Derive foo2qpdl-c410scms-wrapper from foo2zjs' foo2qpdl-wrapper (GPL-2.0-or-later, Rick Richardson).
 
 Adds colour mode -Cscms: gs renders RGB at 600 dpi, c410scms-filter converts and screens it,
-foo2qpdl -z3 encodes it. -T turns on the filter's trapping in that mode.
+foo2qpdl -z3 encodes it. -T and -E turn on the filter's trapping and edge enhancement in that mode.
 Usage: patch-foo2qpdl-wrapper /usr/bin/foo2qpdl-wrapper out-file
 """
 import sys
@@ -20,11 +20,12 @@ def replace_once(old, new):
     s = s.replace(old, new)
 
 
-replace_once("""ABS:D:""", """ABS:TD:""")
+replace_once("""ABS:D:""", """ABES:TD:""")
 
 replace_once("""	A)	AIB=-A;;
 """, """	A)	AIB=-A;;
 	T)	SCMS_TRAP=-t;;
+	E)	SCMS_EDGE=-e;;
 """)
 
 replace_once("""case "$COLORMODE" in
@@ -71,7 +72,7 @@ if [ "$COLORMODE" = scms -a "$COLOR" != "" -a "$RES" = 1200x600 ]; then
     $PREFILTER \\
     | ($GS $PAPERSIZE -g$SDIM -r600x600 -sDEVICE=ppmraw $GSOPTS \\
 	-sOutputFile="|cat 1>&3" -_ >/dev/null) 3>&1 \\
-    | c410scms-filter $SCMS_TRAP $BLANK "$SCMS_DATA" \\
+    | c410scms-filter $SCMS_TRAP $SCMS_EDGE $BLANK "$SCMS_DATA" \\
     | foo2qpdl -r$RES -g$DIM -p$PAPER -m$MEDIA -n$COPIES -d$DUPLEX -s$SOURCE \\
 	    -z$MODEL $COLOR $CLIP_UL $CLIP_LR $CLIP_LOG $SAVETONER \\
 	    -a$CA_B,$CA_C,$CA_S,$CA_CR,$CA_MG,$CA_YB \\

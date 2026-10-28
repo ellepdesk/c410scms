@@ -15,6 +15,9 @@
  * Trapping (-t) approximates Samsung's host-side trapping from measurements of its output, not
  * bit-exact: along straight edges between flat areas, the lighter side's C/M/Y spread under the
  * darker side, 1 pixel, or 2 under areas with much black.
+ *
+ * Edge enhancement (-e), likewise measured: where a pixel has clearly more C, M or K than a
+ * neighbour, half or whole 1200 dpi dots are added to its screened level, more for a larger step.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +29,7 @@
 #define TRAP_WIDE_K 108		/* black ink from which traps are 2 pixels wide */
 #define TRAP_CLOSE (22 * 20)	/* darkness margin (x20) below which a wide trap only reaches its 2nd pixel */
 #define WIN 3			/* rows a trap looks above and below a pixel */
+#define EDGE_SMOOTH 8		/* ink difference along an edge that still counts as straight */
 #define RING (2 * WIN + 1)
 
 static uint8_t table[GRID * GRID * GRID * 4];
@@ -157,6 +161,42 @@ static int straight(int y, int x, int uy, int ux)
 	return same(px(y + ux, x + uy), p) || same(px(y - ux, x - uy), p);
 }
 
+/* ink steps from which edge enhancement ORs 1, 2 or 3 into the level; [plane][edge across rows] */
+static const int edge_step[4][2][3] = {
+	{ { 58, 119, 195 }, { 79, 146, 213 } },
+	{ { 59, 130, 201 }, { 77, 143, 205 } },
+	{ { 256, 256, 256 }, { 256, 256, 256 } },	/* yellow: never enhanced */
+	{ { 68, 138, 209 }, { 68, 138, 209 } },
+};
+
+static int edge_mask(int y, int x, int p, int trapping)
+{
+	static const int dirs[4][2] = { { 0, 1 }, { 0, -1 }, { 1, 0 }, { -1, 0 } };
+	const uint8_t *k = px(y, x);
+	int dk = darkness(k), m = 0;
+
+	for (int d = 0; d < 4; d++) {
+		int uy = dirs[d][0], ux = dirs[d][1];
+		const uint8_t *q = px(y + uy, x + ux);
+		int step = k[p] - q[p];
+
+		if (step <= 0)
+			continue;
+		/* with trapping, the lighter side of a colour edge already gets the trap instead */
+		if (trapping && !same(q, white_px) && darkness(q) >= dk)
+			continue;
+		if (abs(px(y + ux, x + uy)[p] - k[p]) > EDGE_SMOOTH && abs(px(y - ux, x - uy)[p] - k[p]) > EDGE_SMOOTH)
+			continue;
+
+		const int *t = edge_step[p][uy != 0];
+		int n = (step >= t[0]) + (step >= t[1]) + (step >= t[2]);
+
+		if (n > m)
+			m = n;
+	}
+	return m;
+}
+
 static void trap_pixel(int y, int x, uint8_t *out)
 {
 	static const int dirs[4][2] = { { 0, 1 }, { 0, -1 }, { 1, 0 }, { -1, 0 } };
@@ -208,11 +248,14 @@ int main(int argc, char **argv)
 {
 	/* -b ROWS: print nothing from that row of each page on (foo2qpdl band padding, see the wrapper) */
 	long blank_from = -1;
-	int trap = 0;
+	int trap = 0, edge = 0;
 
 	while (argc > 2 && argv[1][0] == '-') {
-		if (!strcmp(argv[1], "-t")) {
-			trap = 1;
+		if (!strcmp(argv[1], "-t") || !strcmp(argv[1], "-e")) {
+			if (argv[1][1] == 't')
+				trap = 1;
+			else
+				edge = 1;
 			argv++;
 			argc--;
 		} else if (!strcmp(argv[1], "-b") && argc > 3) {
@@ -224,10 +267,10 @@ int main(int argc, char **argv)
 		}
 	}
 	if (argc != 2)
-		die("usage: c410scms-filter [-t] [-b rows] <data-file> <ppm-pages >bitcmyk-pages");
+		die("usage: c410scms-filter [-t] [-e] [-b rows] <data-file> <ppm-pages >bitcmyk-pages");
 	load_data(argv[1]);
 
-	int first_byte = 1, delay = trap ? WIN : 0;
+	int first_byte = 1, delay = trap ? WIN : edge ? 1 : 0;
 
 	for (;;) {
 		int c1 = getc(stdin), c2 = getc(stdin);
@@ -271,17 +314,22 @@ int main(int argc, char **argv)
 				row[p] = screen[p].thr + (size_t)(oy % screen[p].h) * screen[p].w * 3;
 			for (int x = 0; x < w; x++) {
 				uint8_t k[4];
-				int byte = 0;
+				const uint8_t *c = px(oy, x);
+				int byte = 0, edgy = edge && !(same(px(oy, x - 1), c) && same(px(oy, x + 1), c) &&
+							       same(px(oy - 1, x), c) && same(px(oy + 1, x), c));
 
 				if (trap)
 					trap_pixel(oy, x, k);
 				else
-					memcpy(k, px(oy, x), 4);
+					memcpy(k, c, 4);
 				for (int p = 0; p < 4; p++) {
 					const uint8_t *t = row[p] + (x % screen[p].w) * 3;
 					int v = 255 - k[p];
 					int code = v >= t[0] ? 3 : v >= t[1] ? 2 : v >= t[2] ? 1 : 0;
 					int level = 3 - code;
+
+					if (edgy && p != 2)
+						level |= edge_mask(oy, x, p, trap);
 
 					byte |= (level >> 1) << (7 - p);
 					byte |= (level & 1) << (3 - p);

@@ -21,10 +21,8 @@ zero phase offset to the page origin) and on all 4,913 grid colours of the colou
 generator's computed table gives identical CMYK for all 16,777,216 RGB inputs.
 
 Samsung's defaults enable host-side trapping (`JCLTrapping` medium) and edge enhancement
-(`JCLEdgeEnhance` normal). They change only pixels next to colour edges and are not implemented
-here bit-exactly; `verify/run --edges` shows their effect (about 600,000 of 23 million pixels on the test page,
-almost all in its noise and colour-block areas). `qpdldecode` reports PBM heights one stripe short;
-the data itself is complete.
-
-`c410scms-filter -t` approximates the trapping part; `verify/run --trap` compares it with
-Samsung's trapping (edge enhancement off) on the test page. Results and method: `docs/trapping.md`.
+(`JCLEdgeEnhance` normal). They change only pixels next to colour edges. `c410scms-filter -t` and
+`-e` approximate them (not bit-exactly): `verify/run --trap` compares trapping alone and
+`verify/run --edges` both against Samsung's defaults on the test page. Results and method:
+`docs/trapping.md`. `qpdldecode` reports PBM heights one stripe short; the data itself is
+complete.

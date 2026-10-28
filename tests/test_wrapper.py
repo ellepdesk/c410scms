@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Pelle van der Heide
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""tools/patch-foo2qpdl-wrapper: the -Cscms pipeline, its bottom clip and -T, with stub programs."""
+"""tools/patch-foo2qpdl-wrapper: the -Cscms pipeline, its bottom clip, -T and -E, with stub programs."""
 import os
 import stat
 import subprocess
@@ -79,9 +79,10 @@ class WrapperClipTest(unittest.TestCase):
         # 7016 - 100 - 0 = 6916 rows would need 124 rows of padding, more than the clip has
         self.assertEqual(self.clip(7016, "-u 150x100", "-l 150x0"), (6912, "150x4", []))
 
-    def test_trapping_option_reaches_the_filter(self):
+    def test_trapping_and_edge_options_reach_the_filter(self):
         self.assertEqual(self.foo2qpdl_args(6600, "-u 150x100", "-l 150x100")[0], [])
         self.assertEqual(self.foo2qpdl_args(6600, "-u 150x100", "-l 150x100", ["-T"])[0], ["-t"])
+        self.assertEqual(self.foo2qpdl_args(6600, "-u 150x100", "-l 150x100", ["-T", "-E"])[0], ["-t", "-e"])
 
 
 if __name__ == "__main__":

@@ -1130,6 +1130,16 @@
 *FoomaticRIPOptionSetting Trapping=Off: " "
 *CloseUI: *Trapping
 
+*OpenUI *EdgeEnhance/Edge enhancement (Samsung colour, Best): PickOne
+*FoomaticRIPOption EdgeEnhance: enum CmdLine A
+*OrderDependency: 320 AnySetup *EdgeEnhance
+*DefaultEdgeEnhance: On
+*EdgeEnhance On/On: "%% FoomaticRIPOptionSetting: EdgeEnhance=On"
+*FoomaticRIPOptionSetting EdgeEnhance=On: " -E "
+*EdgeEnhance Off/Off: "%% FoomaticRIPOptionSetting: EdgeEnhance=Off"
+*FoomaticRIPOptionSetting EdgeEnhance=Off: " "
+*CloseUI: *EdgeEnhance
+
 *CloseGroup: Adjustment
 
 *OpenGroup: Miscellaneous/Miscellaneous

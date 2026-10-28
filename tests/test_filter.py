@@ -101,10 +101,33 @@ def trap(ink, w, h):
     return out
 
 
-def expected_page(table, screens, pixels, w, h, trapped=False):
-    ink = [[255 - v for v in interpolate(table, px)] for px in pixels]
-    if trapped:
-        ink = trap(ink, w, h)
+EDGE_STEPS = {0: ((58, 119, 195), (79, 146, 213)), 1: ((59, 130, 201), (77, 143, 205)),
+              3: ((68, 138, 209), (68, 138, 209))}
+
+
+def edge_mask(ink, w, h, y, x, p, trapping):
+    """Reference for -e: the half-dot mask ORed into plane p's level, from the rules in docs/trapping.md."""
+    def at(yy, xx):
+        return ink[yy * w + xx] if 0 <= yy < h and 0 <= xx < w else [0, 0, 0, 0]
+
+    if p not in EDGE_STEPS:
+        return 0
+    k = at(y, x)
+    m = 0
+    for uy, ux in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        q = at(y + uy, x + ux)
+        step = k[p] - q[p]
+        if step <= 0 or (trapping and q != [0, 0, 0, 0] and darkness(q) >= darkness(k)):
+            continue
+        if abs(at(y + ux, x + uy)[p] - k[p]) > 8 and abs(at(y - ux, x - uy)[p] - k[p]) > 8:
+            continue
+        m = max(m, sum(step >= t for t in EDGE_STEPS[p][uy != 0]))
+    return m
+
+
+def expected_page(table, screens, pixels, w, h, trapped=False, edges=False):
+    plain = [[255 - v for v in interpolate(table, px)] for px in pixels]
+    ink = trap(plain, w, h) if trapped else plain
     out = bytearray()
     for y in range(h):
         for x in range(w):
@@ -112,6 +135,8 @@ def expected_page(table, screens, pixels, w, h, trapped=False):
             byte = 0
             for p, (sw, sh, cells) in enumerate(screens):
                 level = ink_level(v[p], cells[(y % sh) * sw + x % sw])
+                if edges:
+                    level |= edge_mask(plain, w, h, y, x, p, trapped)
                 byte |= (level >> 1) << (7 - p)
                 byte |= (level & 1) << (3 - p)
             out.append(byte)
@@ -141,8 +166,8 @@ class FilterTest(unittest.TestCase):
             expected += expected_page(table, screens, pixels, w, h)
         self.assertEqual(self.run_filter(blob, ppm), expected)
 
-    def test_trapping_matches_python_model_on_block_pages(self):
-        rng = random.Random(36)
+    def block_pages(self, seed, **options):
+        rng = random.Random(seed)
         table, screens, blob = synthetic_data(rng)
         ppm, expected = b"", b""
         for w, h in ((41, 29), (13, 3)):
@@ -155,8 +180,32 @@ class FilterTest(unittest.TestCase):
                     for x in range(x0, min(w, x0 + rng.randrange(1, 9))):
                         pixels[y * w + x] = c
             ppm += b"P6\n%d %d\n255\n" % (w, h) + bytes(c for p in pixels for c in p)
-            expected += expected_page(table, screens, pixels, w, h, trapped=True)
+            expected += expected_page(table, screens, pixels, w, h, **options)
+        return blob, ppm, expected
+
+    def test_trapping_matches_python_model_on_block_pages(self):
+        blob, ppm, expected = self.block_pages(36, trapped=True)
         self.assertEqual(self.run_filter(blob, ppm, "-t"), expected)
+
+    def test_edge_enhancement_matches_python_model_on_block_pages(self):
+        blob, ppm, expected = self.block_pages(37, edges=True)
+        self.assertNotEqual(expected, self.block_pages(37)[2])
+        self.assertEqual(self.run_filter(blob, ppm, "-e"), expected)
+        blob, ppm, expected = self.block_pages(38, trapped=True, edges=True)
+        self.assertEqual(self.run_filter(blob, ppm, "-t", "-e"), expected)
+
+    def test_edge_mask_grows_with_the_ink_step_and_skips_yellow(self):
+        for ink, mask in ((50, 0), (60, 1), (120, 2), (200, 3)):
+            page = [[ink, 0, ink, ink]] * 3 + [[0, 0, 0, 0]] * 3
+            self.assertEqual([edge_mask(page * 3, 6, 3, 1, 2, p, False) for p in range(4)],
+                             [mask, 0, 0, sum(ink >= t for t in (68, 138, 209))])
+
+    def test_edge_enhancement_with_trapping_only_on_the_darker_side(self):
+        light, dark = [130, 0, 0, 0], [0, 210, 0, 0]
+        page = ([light] * 3 + [dark] * 3) * 3
+        self.assertEqual(edge_mask(page, 6, 3, 1, 2, 0, False), 2)
+        self.assertEqual(edge_mask(page, 6, 3, 1, 2, 0, True), 0)
+        self.assertEqual(edge_mask(page, 6, 3, 1, 3, 1, True), 3)
 
     def test_trapping_spreads_the_lighter_colour_under_the_darker(self):
         light, dark = [0, 0, 180, 0], [200, 0, 0, 0]
