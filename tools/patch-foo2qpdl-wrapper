@@ -40,11 +40,30 @@ if [ "$COLORMODE" = scms -a "$COLOR" != "" -a "$RES" = 1200x600 ]; then
     XHALF=`expr $XDIM / 2`
     SDIM=${XHALF}x$YDIM
     DIM=`expr $XHALF \\* 2`x$YDIM
+    # foo2qpdl -z3 labels every band 128 rows high but encodes the last one with only the rows
+    # left, and the printer fills the rest with garbage (a black bar at the bottom right of the
+    # CUPS test page). Extend the page into the bottom clip to a band boundary and print the
+    # extension blank; if the clip is too small for that, clip to the band boundary instead.
+    ULY=`echo "$CLIP_UL" | sed -n 's/.*x//p'`
+    LRX=`echo "$CLIP_LR" | sed -n 's/^-l *//; s/x.*//p'`
+    LRY=`echo "$CLIP_LR" | sed -n 's/.*x//p'`
+    REM=`expr \\( $YDIM - ${ULY:-0} - ${LRY:-0} \\) % 128`
+    BLANK=
+    if [ $REM -ne 0 ]; then
+	PAD=`expr 128 - $REM`
+	if [ ${LRY:-0} -ge $PAD ]; then
+	    BLANK="-b `expr $YDIM - ${LRY:-0}`"
+	    LRY=`expr ${LRY:-0} - $PAD`
+	else
+	    LRY=`expr ${LRY:-0} + $REM`
+	fi
+	CLIP_LR="-l ${LRX:-0}x$LRY"
+    fi
     foo2zjs-pstops $PSTOPS_OPTS | \\
     $PREFILTER \\
     | ($GS $PAPERSIZE -g$SDIM -r600x600 -sDEVICE=ppmraw $GSOPTS \\
 	-sOutputFile="|cat 1>&3" -_ >/dev/null) 3>&1 \\
-    | c410scms-filter "$SCMS_DATA" \\
+    | c410scms-filter $BLANK "$SCMS_DATA" \\
     | foo2qpdl -r$RES -g$DIM -p$PAPER -m$MEDIA -n$COPIES -d$DUPLEX -s$SOURCE \\
 	    -z$MODEL $COLOR $CLIP_UL $CLIP_LR $CLIP_LOG $SAVETONER \\
 	    -a$CA_B,$CA_C,$CA_S,$CA_CR,$CA_MG,$CA_YB \\

@@ -74,11 +74,11 @@ def expected_page(table, screens, pixels, w, h):
 
 
 class FilterTest(unittest.TestCase):
-    def run_filter(self, blob, ppm):
+    def run_filter(self, blob, ppm, *opts):
         with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as f:
             f.write(blob)
         try:
-            return subprocess.run([FILTER, f.name], input=ppm, capture_output=True, check=True).stdout
+            return subprocess.run([FILTER, *opts, f.name], input=ppm, capture_output=True, check=True).stdout
         finally:
             os.unlink(f.name)
 
@@ -101,6 +101,16 @@ class FilterTest(unittest.TestCase):
         self.assertNotEqual(node(table, 16, 16, 16), table_white)
         out = self.run_filter(blob, b"P6\n4 2\n255\n" + b"\xff" * 24)
         self.assertEqual(out, b"\0" * 8)
+
+    def test_blank_from_row_on_every_page(self):
+        rng = random.Random(2)
+        _, _, blob = synthetic_data(rng)
+        page = b"P6\n6 4\n255\n" + bytes(rng.randrange(255) for _ in range(6 * 4 * 3))
+        full = self.run_filter(blob, page + page)
+        out = self.run_filter(blob, page + page, "-b", "3")
+        expected = (full[:18] + b"\0" * 6) * 2
+        self.assertNotEqual(full[18:24], b"\0" * 6)
+        self.assertEqual(out, expected)
 
     def test_rejects_bad_data_file(self):
         with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as f:

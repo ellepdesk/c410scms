@@ -120,8 +120,16 @@ static int read_int(FILE *f)
 
 int main(int argc, char **argv)
 {
+	/* -b ROWS: print nothing from that row of each page on (foo2qpdl band padding, see the wrapper) */
+	long blank_from = -1;
+
+	if (argc == 4 && !strcmp(argv[1], "-b")) {
+		blank_from = atol(argv[2]);
+		argv += 2;
+		argc -= 2;
+	}
 	if (argc != 2)
-		die("usage: c410scms-filter <data-file> <ppm-pages >bitcmyk-pages");
+		die("usage: c410scms-filter [-b rows] <data-file> <ppm-pages >bitcmyk-pages");
 	load_data(argv[1]);
 
 	int first_byte = 1;
@@ -163,6 +171,8 @@ int main(int argc, char **argv)
 				}
 				out[x] = byte;
 			}
+			if (blank_from >= 0 && y >= blank_from)
+				memset(out, 0, w);
 			/* foo2qpdl takes a stream starting with 'P' for pksmraw; this pixel is in the clipped margin. */
 			if (first_byte && out[0] == 'P')
 				out[0] = 0;
