@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+# c410scms-gen: build c410scms.dat for c410scms-filter from Samsung's own C410 colour file.
+#
+# Copyright (C) 2026 Pelle van der Heide
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Usage: c410scms-gen C410sc.cts [libscmssc.so] -o c410scms.dat
+#
+# C410sc.cts ships in Samsung's Unified Linux Driver (SULDR package suld-ppd-4); it is not
+# redistributed here. libscmssc.so (SULDR suld-driver2) is optional: when given, the exact
+# black-optimisation K curve is read from it, otherwise a gamma approximation is used.
+import argparse
+import bisect
+import struct
+import sys
+
+GRID = 17
+DEPTH_2BIT = 0x15
+PLAIN_PAPER = 1
+K_CURVE_SYMBOL = b"_ZZN18CAdjustmentService23uccmBlackOptimizeCMYK17EP24TESCMSEnhancedKOptParamsPhE4C.73"
+
+
+class Cts:
+    """Samsung SCMS table container: TOC of (type, 20-byte signature, offset, size) records."""
+
+    def __init__(self, data):
+        self.data = data
+        count, recsize = struct.unpack_from("<HH", data, 0x6C)
+        self.entries = []
+        for i in range(count):
+            pos = 0x70 + i * recsize
+            typ = struct.unpack_from("<I", data, pos)[0]
+            sig = data[pos + 4:pos + recsize - 8]
+            off, size = struct.unpack_from("<II", data, pos + recsize - 8)
+            self.entries.append((typ, sig, off, size))
+
+    def lookup(self, typ, sig):
+        """First entry of this type whose non-zero signature bytes all equal the request."""
+        for t, esig, off, _ in self.entries:
+            if t == typ and all(e == 0 or e == r for e, r in zip(esig, sig)):
+                return self.block(off)
+        raise LookupError(f"no table of type {typ:#x} for signature {sig.hex()}")
+
+    def block(self, off):
+        """Block = 7 x u32 counts (u32 groups, u16 groups, u8 groups), then the data in that order."""
+        _, n32a, n32b, n16a, n16b, n8a, n8b = struct.unpack_from("<7I", self.data, off)
+        pos = off + 0x1C
+        n32, n16, n8 = n32a + n32b, n16a + n16b, n8a + n8b
+        u32 = list(struct.unpack_from(f"<{n32}I", self.data, pos))
+        pos += 4 * n32
+        u16 = list(struct.unpack_from(f"<{n16}H", self.data, pos))
+        pos += 2 * n16
+        return u32, u16, self.data[pos:pos + n8]
+
+
+def signature(colour=0, depth=DEPTH_2BIT, paper=PLAIN_PAPER, screen_id=0, obj=0, variant=0):
+    s = bytearray(12)
+    s[0], s[1], s[2], s[3], s[4], s[8] = colour, depth, paper, screen_id, obj, variant
+    return bytes(s)
+
+
+def colour_table(cts):
+    """17^3 RGB->CMYK table (bytes are 255 - ink), R slowest. Photo variant as stored in the file."""
+    u32, u16, u8 = cts.lookup(5, signature(obj=0))
+    grid, channels = u16[0], u16[1]
+    if (grid, channels) != (GRID, 4):
+        raise ValueError(f"unexpected colour table layout {grid}^3 x {channels}")
+    return [list(u8[i:i + 4]) for i in range(0, GRID ** 3 * 4, 4)]
+
+
+def black_optimisation_params(cts):
+    """Record 1 of the type 0x20 block: (threshold, cmy keep/k blend for the outer and middle band, k curve weight)."""
+    u32, _, u8 = cts.lookup(0x20, signature())
+    count = u32[0]
+    if count < 2:
+        return (34, 8, 3, 4, 7, 1)
+    rec = u8[8:16]
+    return tuple(rec[:6])
+
+
+def k_curve_from_library(path):
+    """Read the 256-entry K curve from libscmssc.so's symbol table (ELF64 little endian)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:4] != b"\x7fELF" or data[4] != 2:
+        raise ValueError("not an ELF64 file")
+    shoff, = struct.unpack_from("<Q", data, 0x28)
+    shentsize, shnum, _ = struct.unpack_from("<HHH", data, 0x3A)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shentsize) for i in range(shnum)]
+    for sec in sections:
+        if sec[1] != 2:  # SHT_SYMTAB
+            continue
+        strtab = sections[sec[6]]
+        for off in range(sec[4], sec[4] + sec[5], 24):
+            name_off, _, _, shndx, value, size = struct.unpack_from("<IBBHQQ", data, off)
+            start = strtab[4] + name_off
+            if data[start:data.index(b"\0", start)] == K_CURVE_SYMBOL and size == 256:
+                target = sections[shndx]
+                file_off = value - target[3] + target[4]
+                return list(data[file_off:file_off + 256])
+    raise LookupError("K curve symbol not found")
+
+
+def k_curve_approximation():
+    return [round(255 * (i / 255) ** 1.6665) for i in range(256)]
+
+
+def black_optimise(table, params, k_curve):
+    """Move near-neutral colours from CMY to K, in three chroma bands below the threshold."""
+    t, keep_far, blend_far, keep_mid, blend_mid, curve_w = params
+    node_rgb = [16 * i for i in range(GRID - 1)] + [255]
+    out = []
+    for ri, r in enumerate(node_rgb):
+        for gi, g in enumerate(node_rgb):
+            for bi, b in enumerate(node_rgb):
+                c, m, y, k = table[(ri * GRID + gi) * GRID + bi]
+                chroma = max(abs(r - g), abs(g - b), abs(b - r))
+                avg = (c + m + y) // 3
+                kk = min(avg if k == 255 else k - ((255 - avg) * k) // 255, 255)
+                if chroma < t - 20:
+                    c = m = y = 255
+                    k = min(k, kk)
+                elif chroma < t - 10:
+                    c, m, y = ((x * keep_mid + (10 - keep_mid) * 255) // 10 for x in (c, m, y))
+                    if kk < k:
+                        k = (kk * blend_mid + k * (10 - blend_mid)) // 10
+                elif chroma < t:
+                    c, m, y = ((x * keep_far + (10 - keep_far) * 255) // 10 for x in (c, m, y))
+                    if kk < k:
+                        k = (kk * blend_far + k * (10 - blend_far)) // 10
+                k = (k_curve[k] * curve_w + k * (10 - curve_w)) // 10
+                if 255 in (r, g, b):
+                    k = 255
+                out.append([c, m, y, k])
+    return out
+
+
+def level_for(curve, t):
+    """Smallest 8-bit level whose curve value reaches threshold t (255 if none)."""
+    return min(bisect.bisect_left(curve, t), 255)
+
+
+def generated_screen(params, u16, curve):
+    """Clustered-dot screen built from a dot-shape order (small cell) and a dot order (super cell)."""
+    a, b, shift, d, e, small_at, big_at, levels = params[0], params[1], params[2], params[3], params[4], params[5], params[6], params[7] & 0xFFFF
+    small, big = u16[small_at:small_at + a * b], u16[big_at:big_at + d * e]
+    width, height, dots = d * a, e * b, d * e
+    total = a * b * dots * levels
+    thr = [[None] * width for _ in range(height)]
+    for i in range(e):
+        for j in range(b):
+            for k in range(d):
+                for l in range(a):
+                    x = (i * shift + k * a + l) % width
+                    t = total - big[i * d + k] - small[j * a + l] * dots * levels
+                    thr[i * b + j][x] = [level_for(curve, t - m * dots) for m in range(levels)]
+    return width, height, thr
+
+
+def matrix_screen(params, u16, curve):
+    """Stored threshold matrix; level m of a cell is reached at threshold - m * step."""
+    width, height, step, levels = params[0], params[1], params[2], params[3]
+    thr = [[[level_for(curve, u16[y * width + x] - m * step) for m in range(levels)]
+            for x in range(width)] for y in range(height)]
+    return width, height, thr
+
+
+def screen(cts, screen_id):
+    sig = signature(screen_id=screen_id)
+    curve = cts.lookup(0xA, sig)[1]
+    order = (9, 8) if screen_id in (3, 5) else (8, 9)
+    for typ in order:
+        try:
+            u32, u16, _ = cts.lookup(typ, sig)
+        except LookupError:
+            continue
+        width, height, thr = (matrix_screen if typ == 9 else generated_screen)(u32, u16, curve)
+        if any(len(cell) != 3 for row in thr for cell in row):
+            raise ValueError("only 2-bit (3 threshold) screens are supported")
+        return width, height, thr
+    raise LookupError(f"no screen for id {screen_id}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("cts", help="Samsung C410sc.cts")
+    ap.add_argument("library", nargs="?", help="optional libscmssc.so for the exact K curve")
+    ap.add_argument("-o", "--output", required=True)
+    args = ap.parse_args()
+
+    with open(args.cts, "rb") as f:
+        cts = Cts(f.read())
+    if args.library:
+        k_curve = k_curve_from_library(args.library)
+    else:
+        k_curve = k_curve_approximation()
+        print("note: no libscmssc.so given, using the approximated K curve", file=sys.stderr)
+    table = black_optimise(colour_table(cts), black_optimisation_params(cts), k_curve)
+
+    with open(args.output, "wb") as f:
+        f.write(b"C410SCMS" + struct.pack("<I", 1))
+        f.write(bytes(v for node in table for v in node))
+        for screen_id in (1, 2, 3, 4):  # cyan, magenta, yellow, black
+            width, height, thr = screen(cts, screen_id)
+            f.write(struct.pack("<HH", width, height))
+            f.write(bytes(v for row in thr for cell in row for v in cell))
+
+
+if __name__ == "__main__":
+    main()

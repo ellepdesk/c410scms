@@ -1,0 +1,6 @@
+c410scms-filter
+c410scms.dat
+foo2qpdl-c410scms-wrapper
+__pycache__/
+*.cts
+*.so
