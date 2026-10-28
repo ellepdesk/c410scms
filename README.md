@@ -58,6 +58,18 @@ Each model has two PPDs:
 
 The CLP-360 and C420 PPDs are generated from the C410 ones by `tools/make-model-ppds`.
 
+## Verifying against Samsung's driver
+
+    verify/run                    # C410 PPD
+    verify/run --model CLP-360    # or C420
+    verify/run --edges            # keep Samsung's trapping/edge enhancement on, to see what they add
+
+This builds a local x86-64 Docker image that downloads Samsung's driver from SULDR
+(checksum-pinned), renders a test page through Samsung's `rastertospl` and through this project,
+decodes both printer streams with `qpdldecode` and compares them pixel by pixel. No printer is
+needed; on an ARM machine Docker runs the image emulated. Samsung's files only ever live in that
+local image, never in this repository (`tests/test_no_proprietary.py` guards against it).
+
 ## How it works
 
     gs (RGB, 600 dpi) → c410scms-filter → foo2qpdl -z3 → printer

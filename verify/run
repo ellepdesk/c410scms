@@ -1,0 +1,10 @@
+#!/bin/sh
+# Copyright (C) 2026 Pelle van der Heide
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Build the reference image (downloads Samsung's driver from SULDR) and compare.
+# Usage: verify/run [--model C410|C420|CLP-360] [--edges] [--size N]
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+docker build --platform linux/amd64 -q -t c410scms-verify -f "$root/verify/Dockerfile" "$root" >/dev/null
+exec docker run --rm --platform linux/amd64 c410scms-verify "$@"
